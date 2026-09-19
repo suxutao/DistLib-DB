@@ -1,0 +1,13 @@
+sites:
+  - id: "Site A"
+    url: "http://localhost:8001"
+    categories: ["文学"]
+  - id: "Site B"
+    url: "http://localhost:8002"
+    categories: ["科技"]
+  - id: "Site C"
+    url: "http://localhost:8003"
+    categories: ["教育"]
+  - id: "Site D"
+    url: "http://localhost:8004"
+    categories: ["历史"]
