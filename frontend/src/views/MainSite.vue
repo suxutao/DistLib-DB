@@ -185,6 +185,13 @@ const presets = [
   "SELECT * FROM readers",
   "SELECT title, author FROM books WHERE author LIKE '%马%'",
   "SELECT title, category FROM books WHERE total_count >= 4",
+  // --- 高级查询 ---
+  "SELECT category, COUNT(*) FROM books GROUP BY category",
+  "SELECT category, SUM(total_count), MIN(total_count), MAX(total_count) FROM books GROUP BY category",
+  "SELECT reader_name, COUNT(*) FROM borrow_records GROUP BY reader_name ORDER BY COUNT(*) DESC",
+  "SELECT title, category, total_count FROM books ORDER BY total_count DESC LIMIT 5",
+  "SELECT DISTINCT author FROM books",
+  "SELECT * FROM books LIMIT 10 OFFSET 5",
 ]
 
 const planLog = ref([])

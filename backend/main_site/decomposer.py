@@ -1,11 +1,12 @@
 """查询分解器。
 
 根据 ParsedQuery 中的信息判断查询涉及哪些分站点，并为每个站点生成子查询。
+GROUP BY / 聚合查询也能正常路由，子查询会被剥掉 LIMIT/OFFSET（由 executor 最后统一处理）。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .config import (
@@ -17,7 +18,12 @@ from .config import (
     category_to_site,
     sites_for_categories,
 )
-from .parser import ParsedQuery, add_category_predicate, ast_to_sql
+from .parser import (
+    AggInfo,
+    ParsedQuery,
+    add_category_predicate,
+    ast_to_sql,
+)
 
 
 @dataclass
@@ -31,33 +37,59 @@ class DecompositionPlan:
     original_sql: str
     involved_sites: List[SiteConfig]
     sub_queries: List[SubQuery]
-    # 是否需要在主站点做内存 UNION 聚合（同一列集合的简单拼接）
-    # 目前所有跨站点查询都走 UNION，留作扩展点
+
+    # 聚合/分页信息（executor 用来做 merge 和本地 slice）
+    has_group_by: bool = False
+    group_by_cols: List[str] = field(default_factory=list)
+    aggregates: List[AggInfo] = field(default_factory=list)
+    has_having: bool = False
+    limit_value: Optional[int] = None
+    offset_value: Optional[int] = None
+    has_distinct: bool = False
+    has_order_by: bool = False
+    order_spec: List = field(default_factory=list)
+
+    # executor 侧决定如何聚合
+    # - True: 各站点返回行数据 → UNION/merge
+    # - False: 副本表，executor 取第一个成功结果
     needs_in_memory_union: bool = True
 
 
-def decompose(pq: ParsedQuery) -> DecompositionPlan:
-    """把解析后的查询分解为若干子查询，每个子查询下发到一个分站点。
+def _strip_limit_offset(ast) -> "exp.Select":
+    """剥掉 AST 里的 LIMIT / OFFSET，返回副本。"""
+    new_ast = ast.copy()
+    new_ast.set("limit", None)
+    new_ast.set("offset", None)
+    return new_ast
 
-    规则：
-    - 只查询 readers（副本表） → 任选一个站点即可
-    - 明确 WHERE category='X'   → 只下发到对应站点
-    - 明确 WHERE category IN (...) → 下发到涉及的每个站点
-    - 其它（无 category 条件 / 或非 category 条件） → 下发到全部 4 个站点
-    """
+
+def decompose(pq: ParsedQuery) -> DecompositionPlan:
+    """把解析后的查询分解为若干子查询，每个子查询下发到一个分站点。"""
 
     tables_lower = {t.lower() for t in pq.tables}
 
-    # 1) 只查副本表（readers）— 下发到所有副本节点，executor 侧取第一个成功的
+    # 准备：用于子查询的 AST（剥掉 LIMIT/OFFSET）
+    base_ast = _strip_limit_offset(pq.ast) if (pq.limit_value is not None or pq.offset_value is not None) else pq.ast
+
+    # 1) 只查副本表（readers）— 全部下发作为冗余
     if tables_lower <= REPLICATED_TABLES:
-        sub_sql = ast_to_sql(pq.ast)
-        # 副本表每站都有，全部下发作为冗余备份，谁先返回用谁
+        sub_sql = ast_to_sql(base_ast)
         sub_queries = [SubQuery(site=s, sql=sub_sql) for s in SITES]
         return DecompositionPlan(
             original_sql=pq.original_sql,
             involved_sites=list(SITES),
             sub_queries=sub_queries,
-            needs_in_memory_union=False,  # executor 取第一个成功的，不 UNION
+            # 聚合/分页信息
+            has_group_by=pq.has_group_by,
+            group_by_cols=pq.group_by_cols,
+            aggregates=pq.aggregates,
+            has_having=pq.has_having,
+            limit_value=pq.limit_value,
+            offset_value=pq.offset_value,
+            has_distinct=pq.has_distinct,
+            has_order_by=pq.has_order_by,
+            order_spec=pq.order_spec,
+            needs_in_memory_union=not pq.has_group_by,  # GROUP BY 也要合并
         )
 
     # 2) 从 WHERE 中明确提取出 category 值
@@ -66,25 +98,20 @@ def decompose(pq: ParsedQuery) -> DecompositionPlan:
     if explicit_cats is not None and len(explicit_cats) > 0:
         involved = sites_for_categories(explicit_cats)
     else:
-        # 3) 没有明确 category 条件 → 涉及所有分片站点
         involved = list(SITES)
 
-    # 为每个涉及站点生成子查询
-    # - 如果原查询已有 category 条件（IN / =），直接下发原 SQL（信任它会自然过滤）
-    # - 只有原查询完全没 category 条件时，才注入 AND category = 'X'
     has_explicit_category = bool(pq.categories_in_where)
 
     sub_queries: List[SubQuery] = []
     for site in involved:
         if has_explicit_category:
-            # 原 SQL 已有 category 条件，直接下发，不再追加
-            sub_sql = ast_to_sql(pq.ast)
+            sub_sql = ast_to_sql(base_ast)
         else:
             cat = site.categories[0] if site.categories else None
             if cat is None:
-                sub_sql = ast_to_sql(pq.ast)
+                sub_sql = ast_to_sql(base_ast)
             else:
-                sub_ast = add_category_predicate(pq.ast, cat)
+                sub_ast = add_category_predicate(base_ast, cat)
                 sub_sql = ast_to_sql(sub_ast)
         sub_queries.append(SubQuery(site=site, sql=sub_sql))
 
@@ -92,5 +119,14 @@ def decompose(pq: ParsedQuery) -> DecompositionPlan:
         original_sql=pq.original_sql,
         involved_sites=involved,
         sub_queries=sub_queries,
+        has_group_by=pq.has_group_by,
+        group_by_cols=pq.group_by_cols,
+        aggregates=pq.aggregates,
+        has_having=pq.has_having,
+        limit_value=pq.limit_value,
+        offset_value=pq.offset_value,
+        has_distinct=pq.has_distinct,
+        has_order_by=pq.has_order_by,
+        order_spec=pq.order_spec,
         needs_in_memory_union=len(sub_queries) > 1,
     )

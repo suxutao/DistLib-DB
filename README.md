@@ -197,10 +197,13 @@ Invoke-RestMethod -Uri http://localhost:8000/api/query -Method Post -ContentType
 | ✅ 支持 | ❌ 不支持 |
 |--------|----------|
 | SELECT (指定列 / `*`) | 子查询 / 嵌套 SELECT |
-| WHERE (`=`, `IN`, `LIKE`, `>`, `<`, `>=`, `<=`, `!=`, `AND`, `OR`) | GROUP BY / 聚合函数 |
-| INNER JOIN（同站点） | LIMIT / OFFSET |
-| ORDER BY（单字段） | DISTINCT |
-| 列别名 | 写操作（INSERT/UPDATE/DELETE） |
+| WHERE (`=`, `IN`, `LIKE`, `>`, `<`, `>=`, `<=`, `!=`, `AND`, `OR`) | 跨站点 JOIN（不同分片键） |
+| **GROUP BY** + `COUNT/SUM/MIN/MAX` | `AVG` 在 GROUP BY 中（可单列使用） |
+| **ORDER BY**（多字段） | 写操作（INSERT/UPDATE/DELETE） |
+| **LIMIT / OFFSET** | |
+| **DISTINCT** | |
+| INNER JOIN（同站点 books + borrow_records） | |
+| 列别名 | |
 
 ## 🔗 API 契约
 
