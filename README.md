@@ -6,9 +6,9 @@
 
 ```
              ┌──────────────────┐
-             │   主站点 (8000)   │
-             │  FastAPI + sqlglot │
-             │  httpx 并发调度     │
+             │   主站点 (8000)  │
+             │ FastAPI + sqlglot│
+             │  httpx 并发调度  │
              └────────┬─────────┘
                       │ HTTP REST + WebSocket
     ┌────────┬────────┼────────┬────────┐
@@ -58,7 +58,6 @@ DistLib‑DB/
 │           └── SiteMonitor.vue # 分站点实时命令监控 + 健康状态
 ├── start.bat                   # ⭐ Windows 一键启动（自动建 conda 环境 + 装依赖）
 ├── stop.bat                    # ⭐ Windows 一键停止（扫端口杀进程）
-├── 产品文档.md                 # 原始需求设计文档
 └── README.md
 ```
 
@@ -108,14 +107,14 @@ DistLib‑DB/
 
 ## 🛠️ 环境要求
 
-- **Python 3.10+**（推荐 conda 环境 `libDB`）
+- **Python 3.12+**
 - **Node.js 18+** + **npm 9+**
 - 端口（8000-8004, 5173）未被占用
 
 ### Python 依赖
 
 ```bash
-conda create -n libDB python=3.11 -y
+conda create -n libDB python=3.12 -y
 conda activate libDB
 pip install fastapi uvicorn sqlglot httpx pyyaml
 ```
@@ -245,20 +244,3 @@ Invoke-RestMethod -Uri http://localhost:8000/api/query -Method Post -ContentType
 - `<keep-alive :key="route.fullPath">` 缓存每个路由实例
 - `/site/8001` → `/site/8002` 各自独立缓存，日志/状态互不干扰
 - 跨页面切换不丢数据，WebSocket 在后台标签页持续接收
-
-## 🐛 常见问题
-
-**Q: 分站点启动报 ModuleNotFoundError: No module named 'backend'**
-A: 必须在项目根目录执行，不要 cd 到 backend/site 里运行。
-
-**Q: 某个分站点未启动，查询仍能返回但 partial=true**
-A: 正常的降级行为——executor 5s 超时后跳过该站点，warnings 字段标明。
-
-**Q: 副本表 readers 查询在 Site A 挂了后仍能返回**
-A: 正常！副本表查询会同时下发到全部 4 站，谁先返回用谁。
-
-**Q: 实时日志窗口不自动贴底？**
-A: 三重保险：收到消息立即滚 / 切 Tab 时滚 / keep-alive 切回时滚。如果还不行检查浏览器控制台。
-
-**Q: 分站点每重启数据会重置？**
-A: 是的。`init_db()` 启动时删旧 .db 重建，保证每次演示数据一致。想保留持久化可删掉 `os.remove(db_path)` 那行。
